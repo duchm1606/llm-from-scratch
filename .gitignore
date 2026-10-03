@@ -21,3 +21,6 @@ bin/
 
 # Misc
 *.log
+
+# Downloaded data (make data)
+data/
