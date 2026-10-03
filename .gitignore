@@ -1,0 +1,23 @@
+# Book resources (raw content from "Build a Large Language Model From Scratch")
+.resource/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Build outputs
+*.o
+*.a
+*.so
+*.out
+build/
+bin/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+*.log
