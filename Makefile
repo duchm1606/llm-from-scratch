@@ -24,7 +24,7 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 $(LIB): $(OBJS)
 	$(AR) rcs $@ $^
 
-$(BUILD)/test_%: tests/test_%.c $(LIB) $(wildcard include/*.h)
+$(BUILD)/test_%: tests/test_%.c $(LIB) $(wildcard include/*.h tests/*.h)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) -o $@
 
 test: $(TESTS) $(DATA)

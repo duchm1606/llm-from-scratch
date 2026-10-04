@@ -2,21 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "test_util.h"
 #include "tokenizer.h"
-
-#define ENCODER_JSON "data/gpt2/encoder.json"
-#define VOCAB_BPE "data/gpt2/vocab.bpe"
-#define THE_VERDICT "data/the-verdict.txt"
-
-static int failures;
-
-#define CHECK(cond)                                                                  \
-    do {                                                                             \
-        if (!(cond)) {                                                               \
-            fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, #cond); \
-            failures++;                                                              \
-        }                                                                            \
-    } while (0)
 
 /* Expected ids come from tiktoken.get_encoding("gpt2"); -1 ends each list. */
 typedef struct {
@@ -88,32 +75,6 @@ static void check_case(const Tokenizer *tok, const char *name, const char *text,
     free(ids);
 }
 
-static char *read_text(const char *path, size_t *len)
-{
-    FILE *f = fopen(path, "rb");
-    if (!f)
-        return NULL;
-    char *buf = NULL;
-    size_t cap = 0, n = 0, got;
-    do {
-        if (n == cap) {
-            cap = cap ? cap * 2 : 1 << 16;
-            char *grown = realloc(buf, cap);
-            if (!grown) {
-                free(buf);
-                fclose(f);
-                return NULL;
-            }
-            buf = grown;
-        }
-        got = fread(buf + n, 1, cap - n, f);
-        n += got;
-    } while (got > 0);
-    fclose(f);
-    *len = n;
-    return buf;
-}
-
 /* Section 2.6: the story is 5,145 tokens, and the sliding-window example
  * starts at token 50 with " and established himself in a". */
 static void check_the_verdict(const Tokenizer *tok)
@@ -167,10 +128,5 @@ int main(void)
     CHECK(tokenizer_decode(tok, negative, 1, NULL) == NULL);
 
     tokenizer_free(tok);
-    if (failures) {
-        fprintf(stderr, "test_tokenizer: %d failure(s)\n", failures);
-        return 1;
-    }
-    printf("test_tokenizer: all checks passed\n");
-    return 0;
+    return test_report("test_tokenizer");
 }
