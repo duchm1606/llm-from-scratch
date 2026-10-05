@@ -1,6 +1,8 @@
 #ifndef LLM_TEST_UTIL_H
 #define LLM_TEST_UTIL_H
 
+#include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -43,6 +45,18 @@ static inline char *read_text(const char *path, size_t *len)
     fclose(f);
     *len = n;
     return buf;
+}
+
+/* Whether got[i] is within tol of want[i] for all i, relative to |want[i]|
+ * once that exceeds 1. */
+static inline bool floats_close(const float *got, const float *want, size_t n, float tol)
+{
+    for (size_t i = 0; i < n; i++) {
+        float scale = fabsf(want[i]) > 1 ? fabsf(want[i]) : 1;
+        if (!(fabsf(got[i] - want[i]) <= tol * scale))
+            return false;
+    }
+    return true;
 }
 
 /* Prints the summary line and returns the process exit code. */

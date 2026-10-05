@@ -1,6 +1,7 @@
 CC       ?= cc
 CFLAGS   ?= -std=c11 -O2 -Wall -Wextra -Wpedantic
 CPPFLAGS += -Iinclude
+LDLIBS   += -lm
 
 BUILD := build
 OBJS  := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/*.c))
@@ -25,7 +26,7 @@ $(LIB): $(OBJS)
 	$(AR) rcs $@ $^
 
 $(BUILD)/test_%: tests/test_%.c $(LIB) $(wildcard include/*.h tests/*.h)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
 test: $(TESTS) $(DATA)
 	@for t in $(TESTS); do ./$$t || exit 1; done
