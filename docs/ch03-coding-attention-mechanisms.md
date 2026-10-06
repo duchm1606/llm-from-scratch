@@ -2,215 +2,311 @@
 
 ## Why this chapter matters
 
-Trong Chapter 2, ta đã biến đổi chuỗi text thô thành các vector số học: **Input Embeddings** = Token Embeddings + Positional Embeddings.
+In Chapter 2, raw text was converted into **input embeddings** (token embeddings + positional embeddings). However, those embeddings are **static and context-independent**: the word `"bank"` in *"river bank"* and *"bank account"* begins with the exact same token embedding vector.
 
-Tuy nhiên, các embedding vector này vẫn mang tính **cục bộ và tĩnh**: một từ như `"bank"` trong *"river bank"* và *"bank account"* sẽ có token embedding ban đầu giống nhau (chỉ khác vị trí). Mô hình chưa thể nắm bắt được ngữ cảnh liên kết giữa các từ cách xa nhau.
+The **attention mechanism** solves this by enabling each token to attend to every other token in the sequence. It computes **context vectors** that enrich each token's representation with contextual information from the entire input.
 
-**Attention mechanism** giải quyết triệt để vấn đề này bằng cách cho phép mỗi token "chú ý" (attend) đến các token khác trong câu, qua đó tổng hợp thông tin để tạo thành các **Context Vectors** giàu ngữ cảnh.
+![Stages of LLM development](../public/ch03/figure-3-01.png)
 
 ---
 
-## The Attention Evolution
+## The Four Attention Variants
 
-Chương 3 xây dựng cơ chế Attention qua 4 bước tiến hóa:
+This chapter builds attention mechanisms incrementally across four stages, culminating in the efficient Multi-Head Attention used in GPT models:
 
 ```
-1. Simple Self-Attention (Không có trọng số trainable)
-   ↓
-2. Self-Attention with Trainable Weights (Query, Key, Value)
-   ↓
-3. Causal Attention (Thêm Causal Mask để không nhìn thấy tương lai)
-   ↓
-4. Multi-Head Attention (Chạy nhiều head song song + Weight Split)
+1. Simple Self-Attention         [3.3] No trainable weights (intuition & math)
+           ↓
+2. Trainable Self-Attention      [3.4] Learnable Q, K, V projection matrices
+           ↓
+3. Causal Attention              [3.5] Upper-triangular mask (prevent peeking into future)
+           ↓
+4. Multi-Head Attention (MHA)    [3.6] Multiple parallel heads + Weight Split
 ```
 
----
-
-## 3.1 & 3.2 Vấn đề của RNN và Sự ra đời của Attention
-
-- **RNN Encoder-Decoder truyền thống**:
-  - Toàn bộ chuỗi đầu vào phải nén vào một vector ẩn duy nhất $h$ (bottleneck).
-  - Với câu dài, thông tin ở đầu câu bị suy giảm (vanishing context / catastrophic forgetting).
-- **Attention**:
-  - Cho phép decoder truy cập trực tiếp vào toàn bộ các trạng thái đầu vào.
-  - Phân bổ trọng số (attention weights) linh hoạt: token nào quan trọng thì chú ý nhiều, không quan trọng thì bỏ qua.
-- **Self-Attention**:
-  - Không cần mô hình RNN; các token trong *cùng một câu* tự tính toán độ liên quan với nhau.
+![Four attention variants](../public/ch03/figure-3-02.png)
 
 ---
 
-## 3.3 Simple Self-Attention (Không có trainable weights)
+## 3.1 & 3.2 Sequence Modeling & The Attention Motivation
 
-Cho chuỗi đầu vào gồm $T$ token embedding: $x^{(1)}, x^{(2)}, \dots, x^{(T)} \in \mathbb{R}^{d_{in}}$.
+**Why:** Traditional RNN encoder-decoder architectures compress an entire sequence into a single fixed-size hidden state `h`. For long sequences, this creates an information bottleneck — early context is lost.
 
-Mục tiêu: Tính toán context vector $z^{(i)}$ cho từng token $x^{(i)}$.
+**Attention mechanism:** Allows the decoder to selectively access all hidden states from the input sequence at every step.
 
-### Các bước tính toán:
-1. **Attention Scores ($\omega$)**: Dùng tích vô hướng (dot product) đo độ tương đồng:
-   $$\omega_{i, j} = x^{(i)} \cdot x^{(j)}$$
-2. **Attention Weights ($\alpha$)**: Chuẩn hóa điểm số bằng hàm Softmax (tổng mỗi hàng = 1):
-   $$\alpha_{i, j} = \frac{\exp(\omega_{i, j})}{\sum_{k=1}^T \exp(\omega_{i, k})}$$
-3. **Context Vector ($z$)**: Tính tổng có trọng số của các vector đầu vào:
-   $$z^{(i)} = \sum_{j=1}^T \alpha_{i, j} x^{(j)}$$
+![Attention mechanism intuition](../public/ch03/figure-3-05.png)
 
-> **Nhược điểm**: Hoàn toàn cố định, không có tham số để mô hình huấn luyện và học hỏi (learnable parameters).
+**Self-Attention:** Instead of connecting an encoder to a decoder, self-attention relates different positions within the **same** sequence to build a richer contextual representation.
+
+![Self-attention in Transformer](../public/ch03/figure-3-06.png)
 
 ---
 
-## 3.4 Self-Attention với Trainable Weights (Q, K, V)
+## 3.3 Simple Self-Attention (No Trainable Weights)
 
-Để mô hình có thể học các mối quan hệ phong phú, ta phân tách mỗi token thành 3 vai trò khác nhau thông qua 3 ma trận trọng số huấn luyện:
+**Why:** Understand the core mechanics (dot product, softmax, weighted sum) before introducing trainable parameters.
 
-| Thuật ngữ | Ký hiệu | Vai trò | Tương tự trong Search Engine |
-|-----------|---------|---------|------------------------------|
-| **Query** | $Q$ | Token hiện tại đang tìm kiếm điều gì | Từ khóa bạn gõ vào ô tìm kiếm |
-| **Key** | $K$ | Đặc trưng của từng token để so khớp | Tiêu đề/Tags của các video |
-| **Value** | $V$ | Thông tin thực sự được trích xuất | Nội dung thực tế của video |
+For an input sequence `X = [x(1), x(2), ..., x(T)]` with shape `[T × d_in]`:
 
-### Công thức:
-1. **Chiếu tuyến tính (Linear Projections)**:
-   $$Q = X W_Q, \quad K = X W_K, \quad V = X W_V$$
-   - Với $X \in \mathbb{R}^{T \times d_{in}}$, $W_Q, W_K \in \mathbb{R}^{d_{in} \times d_k}$, $W_V \in \mathbb{R}^{d_{in} \times d_v}$.
-2. **Scaled Dot-Product Attention**:
-   $$\text{Scores} = Q K^T \in \mathbb{R}^{T \times T}$$
-   $$\text{Attention Weights } A = \text{softmax}\left(\frac{Q K^T}{\sqrt{d_k}}\right)$$
-   > **Tại sao phải chia cho $\sqrt{d_k}$?**
-   > Khi chiều $d_k$ lớn, tích vô hướng giữa 2 vector có phương sai tăng tuyến tính theo $d_k$. Giá trị điểm số quá lớn sẽ đẩy Softmax vào vùng bão hòa (gradient cực nhỏ $\approx 0$), khiến việc học bị đình trệ. Chia cho $\sqrt{d_k}$ đưa phương sai về lại 1.
-3. **Context Vectors**:
-   $$Z = A V \in \mathbb{R}^{T \times d_v}$$
+![Simple self-attention context vector](../public/ch03/figure-3-07.png)
 
----
-
-## 3.5 Causal Attention (Masked Self-Attention)
-
-### Tại sao cần Causal Attention?
-Trong các mô hình sinh ngôn ngữ tự hồi quy (Autoregressive LLMs như GPT), tại bước thời gian $t$, mô hình **chỉ được phép thấy các token từ $1$ đến $t$** để dự đoán token $t+1$. Nó không được phép nhìn thấy tương lai.
-
-### Causal Masking:
-Sau khi tính $QK^T$, trước khi đưa qua Softmax, ta che các vị trí tương lai (nửa tam giác trên $j > i$) bằng $-\infty$:
-
-$$\text{Mask}_{i, j} = \begin{cases} 0 & \text{nếu } j \le i \\ -\infty & \text{nếu } j > i \end{cases}$$
-
-$$\text{Scores}_{\text{masked}} = \frac{Q K^T}{\sqrt{d_k}} + \text{Mask}$$
-
-Vì $\exp(-\infty) = 0$, sau hàm Softmax:
-- Toàn bộ trọng số attention đến tương lai triệt tiêu thành $0.0$.
-- Tổng trọng số các token quá khứ và hiện tại vẫn chuẩn hóa về đúng $1.0$.
-
-### Dropout trên Attention Weights:
-Trong quá trình training, kỹ thuật **Dropout** được áp dụng lên ma trận attention weights $A$: ngẫu nhiên đưa một số trọng số về 0 (và scale các trọng số còn lại) để tránh việc mô hình phụ thuộc quá mức vào một vài token nhất định (chống overfitting).
-
----
-
-## 3.6 Multi-Head Attention (MHA) — Trọng tâm cốt lõi
-
-Thay vì chỉ có một bộ $(Q, K, V)$ duy nhất, Multi-Head Attention chia không gian biểu diễn thành $h$ "heads" hoạt động độc lập và song song.
+### Step 1: Attention Scores (ω)
+Measure pairwise similarity via dot product:
 
 ```
-                    Input X [B, T, C]
-                           │
-       ┌───────────────────┼───────────────────┐
-       ▼                   ▼                   ▼
-    W_Q [C, C]          W_K [C, C]          W_V [C, C]
-       │                   │                   │
-       ▼                   ▼                   ▼
-    Q [B, T, C]         K [B, T, C]         V [B, T, C]
-       │                   │                   │
- ┌─────┴───────────────────┴───────────────────┴─────┐
- │  Reshape & Transpose: [B, num_heads, T, head_dim]  │
- └─────┬───────────────────┬───────────────────┬─────┘
-       ▼                   ▼                   ▼
-    Head 1              Head 2              Head h
-  (Syntax/Grammar)    (Semantics/Ref)     (Proximity)
-       │                   │                   │
-       └───────────────────┼───────────────────┘
-                           ▼
-                  Concat các Heads
-                 [B, T, h * head_dim]
-                           │
-                           ▼
-                 Linear Projection W_O
-                        [C, C]
-                           │
-                           ▼
-                    Output [B, T, C]
+ω_ij = x(i) · x(j)
 ```
 
-### 1. Tại sao cần nhiều Heads?
-- Ngôn ngữ có tính đa diện: Một từ có thể vừa có quan hệ ngữ pháp (chủ ngữ - vị ngữ), vừa có quan hệ ngữ nghĩa (đại từ thay thế), vừa có quan hệ vị trí.
-- Một attention head đơn lẻ chỉ học được một loại quan hệ trọng số.
-- $h$ heads cho phép mô hình đồng thời trích xuất $h$ khía cạnh quan hệ khác nhau tại cùng một vị trí từ.
+![Dot product attention scores](../public/ch03/figure-3-08.png)
 
-### 2. Kỹ thuật Weight Split (Triển khai hiệu quả)
+### Step 2: Attention Weights (α)
+Normalize scores with Softmax so each row sums to 1.0:
 
-Thay vì tạo $h$ ma trận riêng biệt cho mỗi head, thực tế ta tạo **1 ma trận duy nhất gộp chung**:
-- Kích thước embedding gốc: $C = d_{\text{in}} = d_{\text{out}}$ (Ví dụ GPT-2: $C = 768$).
-- Số heads: $h$ (Ví dụ GPT-2: $h = 12$).
-- Kích thước mỗi head: $d_{\text{head}} = C / h$ (Ví dụ: $768 / 12 = 64$).
+```
+α_ij = exp(ω_ij) / Σ_k exp(ω_ik)
+```
 
-Toàn bộ $W_Q, W_K, W_V \in \mathbb{R}^{C \times C}$. Chi phí tính toán là hoàn toàn tương đương, nhưng tận dụng tối đa phép nhân ma trận lớn (BLAS / cuBLAS).
+### Step 3: Context Vectors (z)
+Compute the weighted sum of input vectors:
 
-### 3. Biến đổi Tensor qua các chiều (Shape Transformations)
+```
+z(i) = Σ_j α_ij * x(j)
+```
 
-Hiểu rõ thứ tự các chiều là chìa khóa để implement MHA chính xác:
+![Simple self-attention summary](../public/ch03/figure-3-11.png)
 
-1. **Chiếu tuyến tính ban đầu**:
-   $$X: [B, T, C] \xrightarrow{\times W_Q} Q: [B, T, C]$$
-2. **View / Reshape**:
-   $$[B, T, C] \rightarrow [B, T, h, d_{\text{head}}]$$
-   *(Tách chiều $C$ thành $h$ cụm, mỗi cụm $d_{\text{head}}$ phần tử)*
-3. **Transpose**:
-   $$[B, T, h, d_{\text{head}}] \xrightarrow{\text{swap } 1 \leftrightarrow 2} [B, h, T, d_{\text{head}}]$$
-   > **Tại sao cần swap $T$ và $h$?**
-   > Khi chiều $h$ đứng trước, mỗi head trở thành một ma trận con $[T, d_{\text{head}}]$ độc lập. Phép nhân ma trận tiếp theo tự động diễn ra trên từng head:
-4. **Batched Matrix Multiply**:
-   $$Q \times K^T: [B, h, T, d_{\text{head}}] \times [B, h, d_{\text{head}}, T] \rightarrow [B, h, T, T]$$
-5. **Causal Masking & Softmax**:
-   Áp dụng mask và softmax trên chiều cuối cùng ($T$): kết quả là ma trận trọng số $[B, h, T, T]$.
-6. **Tổng hợp Values**:
-   $$\text{Attn} \times V: [B, h, T, T] \times [B, h, T, d_{\text{head}}] \rightarrow [B, h, T, d_{\text{head}}]$$
-7. **Ghép lại (Merge Heads)**:
-   $$[B, h, T, d_{\text{head}}] \xrightarrow{\text{swap } 1 \leftrightarrow 2} [B, T, h, d_{\text{head}}] \xrightarrow{\text{view}} [B, T, C]$$
-8. **Output Projection $W_O$**:
-   $$[B, T, C] \xrightarrow{\times W_O} [B, T, C]$$
-   $W_O$ là ma trận có thể học được (trainable) có nhiệm vụ hòa trộn (blend) thông tin từ tất cả các heads lại với nhau.
+> **Limitation:** There are no learnable parameters. The model cannot learn distinct query vs. key semantics or adapt to different downstream tasks.
 
 ---
 
-### 4. Góc nhìn bộ nhớ trong C thuần túy
+---
 
-Trong C, không có hàm tensor high-level; toàn bộ tensor đa chiều chỉ là một mảng 1D liên tục trong RAM theo thứ tự **Row-Major**:
+## 3.4 Single-Head Self-Attention with Trainable Weights
 
-- Truy cập phần tử $Q[b, h, t, d]$:
-  $$\text{index} = b \cdot (h \cdot T \cdot d_{\text{head}}) + h \cdot (T \cdot d_{\text{head}}) + t \cdot d_{\text{head}} + d$$
+**Why:** Decouple each token into three specialized roles through learned linear projections. In single-head attention, there is **only one set** of projection weights (`W_Q, W_K, W_V`), producing a single attention map `[T × T]`.
 
-- **Trick không cần copy bộ nhớ khi tính $Q K^T$**:
-  Thay vì transpose thực tế $K$, ta tính tích vô hướng trực tiếp giữa vector $Q[b, h, i]$ và $K[b, h, j]$:
-  $$\text{Score}[b, h, i, j] = \sum_{d=0}^{d_{\text{head}}-1} Q[b, h, i, d] \cdot K[b, h, j, d]$$
-  Cả hai đều đọc dữ liệu liên tục theo chiều $d$, cực kỳ thân thiện với CPU Cache và vectorization (SIMD / AVX).
+| Role | Symbol | Description | Search Engine Analogy |
+|------|--------|-------------|-----------------------|
+| **Query** | `Q` | What the current token is looking for | The search query you type |
+| **Key** | `K` | What features the token has to offer | Video titles / indexing tags |
+| **Value** | `V` | The actual information content to retrieve | The video content itself |
+
+![Linear projections to Q, K, V](../public/ch03/figure-3-13.png)
+
+### Mathematical Formulation (Single-Head)
+
+1. **Linear Projections:**
+   ```
+   Q = X @ W_Q    shape: [T × d_k]
+   K = X @ W_K    shape: [T × d_k]
+   V = X @ W_V    shape: [T × d_v]
+   ```
+   Where `X` has shape `[T × d_in]`, `W_Q` and `W_K` have shape `[d_in × d_k]`, and `W_V` has shape `[d_in × d_v]`.
+
+2. **Attention Scores:**
+   ```
+   Scores = Q @ K.T    shape: [T × T]
+   ```
+
+   ![Computing attention scores](../public/ch03/figure-3-14.png)
+
+3. **Scaled Dot-Product & Softmax:**
+   ```
+   A = softmax( (Q @ K.T) / sqrt(d_k), dim=-1 )
+   ```
+
+   ![Scaling attention scores](../public/ch03/figure-3-15.png)
+
+   > **Why divide by `sqrt(d_k)`?**
+   > As dimension `d_k` grows, the dot products grow large in magnitude, pushing the softmax function into regions with tiny gradients (gradient vanishing). Dividing by `sqrt(d_k)` keeps the variance at 1.
+
+4. **Context Vectors:**
+   ```
+   Z = A @ V    shape: [T × d_v]
+   ```
+
+   ![Full trainable self-attention overview](../public/ch03/figure-3-18.png)
+
+### Single-Head Implementations: SelfAttention_v1 vs. SelfAttention_v2
+- **`SelfAttention_v1` (Section 3.4.1):** Uses raw weights `W_Q, W_K, W_V` of shape `[d_in × d_out]` with manual matrix multiplications `X @ W`.
+- **`SelfAttention_v2` (Section 3.4.2):** Implemented using standard PyTorch `nn.Linear(d_in, d_out, bias=False)` layers. In C, this corresponds to `linear_forward` with weights in `[d_out × d_in]` layout.
 
 ---
 
-## 3.7 Tổng kết các tham số của Attention trong GPT-2
+## 3.5 Single-Head Causal Attention (CausalAttention)
 
-| Cấu hình | GPT-2 Small | GPT-2 Medium | GPT-2 Large | GPT-2 XL |
-|----------|-------------|--------------|-------------|----------|
-| Embedding Dimension ($C$) | 768 | 1024 | 1280 | 1600 |
-| Số Attention Heads ($h$) | 12 | 16 | 20 | 25 |
-| Head Dimension ($d_{\text{head}}$) | 64 | 64 | 64 | 64 |
-| Context Length ($T$) | 1024 | 1024 | 1024 | 1024 |
-| Trọng số MHA 1 Layer | 4 ma trận ($W_Q, W_K, W_V, W_O$) kích thước $C \times C$ |
+**Why:** Autoregressive language models (like GPT) generate text **token by token from left to right**. When predicting the next token at position `t`, the model must not peek at future tokens `t+1, t+2, ...`.
+
+`CausalAttention` is a single-head attention module that incorporates:
+1. An upper-triangular **causal mask**
+2. An optional **dropout layer** on attention weights
+
+### 3.5.1 Causal Masking
+Before applying softmax, mask the upper-triangular entries (`j > i`) with `-inf`:
+
+```
+Mask[i, j] = 0     if j <= i (past & present)
+Mask[i, j] = -inf  if j >  i (future)
+
+Scores_masked = (Q @ K.T) / sqrt(d_k) + Mask
+```
+
+Because `exp(-inf) = 0`, subsequent softmax normalizes future positions to exactly `0.0`:
+
+![Causal attention mask](../public/ch03/figure-3-19.png)
+
+![Attention weights before and after causal mask](../public/ch03/figure-3-20.png)
+
+### 3.5.2 Dropout on Attention Weights
+To prevent overfitting during training, randomly set some attention weights to 0 with probability `dropout_rate` and rescale remaining weights by `1 / (1 - dropout_rate)`:
+
+![Dropout on attention weights](../public/ch03/figure-3-22.png)
+
+### 3.5.3 The Single-Head Causal Class in C
+In this repository, the single-head causal attention module corresponds to the `SelfAttention` struct in `include/attention.h`:
+
+```c
+typedef struct {
+    size_t d_in, d_out;
+    float *w_query, *w_key, *w_value; /* [d_out x d_in] each */
+    float *b_query, *b_key, *b_value; /* [d_out] each, or NULL */
+    bool causal;                      /* true for CausalAttention */
+    double dropout;                   /* dropout rate on attention weights */
+} SelfAttention;
+```
+
+> **The Bottleneck of Single-Head Attention:**
+> In single-head attention, all information is compressed through a single set of attention weights. If position i strongly attends to position j for a syntactic reason (e.g. subject-verb agreement), it cannot simultaneously attend to position k for a semantic reason (e.g. pronoun resolution) without diluting its attention. This directly motivates **Multi-Head Attention** in Section 3.6.
 
 ---
 
-## Checklist Implement cho Repo C
+## 3.6 Multi-Head Attention (MHA) — Deep Dive
 
-Để sẵn sàng cho Chapter 4 (Ghép nối mô hình GPT hoàn chỉnh), ta cần triển khai:
+Multi-Head Attention is the central building block of modern Transformers. Instead of computing a single attention distribution, it splits the embedding into multiple subspaces called **heads**, running self-attention across all heads in parallel.
 
-- [ ] `include/attention.h`: Khai báo struct và API cho Multi-Head Attention.
-- [ ] `src/attention.c`:
-  - `matmul` & projection cho Q, K, V, O.
-  - Scaled dot-product theo từng head.
-  - Causal masking & In-place Softmax ổn định số học (subtract max).
-  - Kết hợp kết quả các heads và chiếu qua $W_O$.
-- [ ] `tests/test_attention.c`: So sánh output với các test cases mẫu của PyTorch.
+### 1. Motivation: Why Multiple Heads?
+Human language expresses multiple simultaneous relationships between words:
+- **Grammar/Syntax:** *"She"* → verb agreement with *"reads"*.
+- **Semantics/Coreference:** *"The animal"* ↔ *"it"*.
+- **Positional/Local Context:** Neighboring words and immediate qualifiers.
+
+A single attention head cannot focus on all these disparate relationships at once. Multiple heads allow the model to learn diverse representation subspaces simultaneously.
+
+![Stacking multiple heads](../public/ch03/figure-3-24.png)
+
+---
+
+### 2. Naive Stacking vs. Weight Split
+
+#### Naive Wrapper (`MultiHeadAttentionWrapper`)
+Instantiates `h` independent `CausalAttention` modules:
+- Sequentially computes `Q_i = X @ W_Q_i`, `K_i = X @ W_K_i`, `V_i = X @ W_V_i` for each head `i = 1 ... h`.
+- Concatenates outputs along the embedding axis:
+  ```
+  Z_concat = [Z_1, Z_2, ..., Z_h]    shape: [T × (h * d_v)]
+  ```
+
+![Concatenating multiple head outputs](../public/ch03/figure-3-25.png)
+
+#### Efficient Weight Split (`MultiHeadAttention`)
+Instead of `h` separate small matrix multiplications, use **one single large projection**:
+- Initialize single matrices `W_Q, W_K, W_V` of shape `[C × C]`, where `C = d_model = h * d_head`.
+- Perform one unified projection: `Q = X @ W_Q`, `K = X @ W_K`, `V = X @ W_V`.
+- Reshape and slice the resulting tensors across heads.
+
+![Weight split architecture](../public/ch03/figure-3-26.png)
+
+> **Computational Advantage:** Launching 1 large GEMM (General Matrix Multiply) utilizes GPU/CPU hardware and BLAS libraries far more efficiently than launching `h` tiny matrix multiplications.
+
+---
+
+### 3. Step-by-Step Tensor Dimensional Transformations
+
+Tracing the tensor shapes through the pipeline is essential for bug-free implementation:
+
+```
+Input X: [B, T, C]
+    │
+    ├─────────────────────────────┬─────────────────────────────┐
+    ▼                             ▼                             ▼
+Q = X @ W_Q                   K = X @ W_K                   V = X @ W_V
+[B, T, C]                     [B, T, C]                     [B, T, C]
+    │                             │                             │
+    └─────────────────────────────┼─────────────────────────────┘
+                                  ▼
+                1. Reshape: [B, T, h, d_head]
+                                  │
+                                  ▼
+                2. Transpose (1 ↔ 2): [B, h, T, d_head]
+                                  │
+                                  ▼
+                3. Batched Q @ K.T / sqrt(d_head): [B, h, T, T]
+                                  │
+                                  ▼
+                4. Causal Mask & Softmax & Dropout: [B, h, T, T]
+                                  │
+                                  ▼
+                5. Context = Attn @ V: [B, h, T, d_head]
+                                  │
+                                  ▼
+                6. Transpose back (1 ↔ 2): [B, T, h, d_head]
+                                  │
+                                  ▼
+                7. View / Flatten heads: [B, T, C]
+                                  │
+                                  ▼
+                8. Output Projection @ W_O: [B, T, C]
+```
+
+#### Why transpose `[B, T, h, d_head]` → `[B, h, T, d_head]`?
+Moving the head dimension `h` before sequence length `T` treats `[B, h]` as batch dimensions. Any matrix multiplication applied to the last two dimensions automatically operates independently and in parallel on each head's `[T × d_head]` matrix.
+
+#### Why the Output Projection (`W_O`)?
+Concatenating head outputs simply places vectors side-by-side. The learned weight matrix `W_O` of shape `[C × C]` linearly combines and blends the representations extracted from all distinct heads into a cohesive vector.
+
+---
+
+### 4. Implementation Perspective in Pure C
+
+In C, multidimensional tensors are contiguous 1D flat arrays in **Row-Major** layout:
+
+```c
+/* Q[b][h][t][d] index formula: */
+size_t idx = b * (h * T * d_head) + head * (T * d_head) + t * d_head + d;
+```
+
+**Cache-Friendly Optimization without Physical Transpose of K:**
+Instead of physically transposing `K` into a temporary buffer, compute the dot product between row `i` of `Q` and row `j` of `K` directly:
+
+```c
+float score = 0.0f;
+for (size_t d = 0; d < d_head; d++) {
+    score += q_head[i * d_head + d] * k_head[j * d_head + d];
+}
+```
+Both vectors are accessed with unit stride (`stride = 1`), maximizing CPU L1 cache line hits and enabling auto-vectorization (SIMD / AVX2).
+
+---
+
+## 3.7 Summary of GPT-2 Attention Specifications
+
+| Parameter | GPT-2 Small | GPT-2 Medium | GPT-2 Large | GPT-2 XL |
+|-----------|-------------|--------------|-------------|----------|
+| Embedding Dimension (`C`) | 768 | 1024 | 1280 | 1600 |
+| Attention Heads (`h`) | 12 | 16 | 20 | 25 |
+| Head Dimension (`d_head`) | 64 | 64 | 64 | 64 |
+| Context Length (`T`) | 1024 | 1024 | 1024 | 1024 |
+| Total MHA Parameters per Layer | ~2.36M | ~4.19M | ~6.55M | ~10.24M |
+
+---
+
+## Chapter 3 Summary Table
+
+| Concept | Key Equations / Operations | Learnable Parameters | Why |
+|---------|----------------------------|----------------------|-----|
+| **Dot-product Attention** | `ω = x(i) · x(j)`, `α = softmax(ω)` | None | Foundation for measuring token relevance |
+| **Trainable Projections** | `Q = X @ W_Q`, `K = X @ W_K`, `V = X @ W_V` | `W_Q, W_K, W_V` | Separates role of querying, key matching, and content retrieval |
+| **Scaled Factor** | `1 / sqrt(d_k)` | None | Stabilizes softmax gradients when dimension is large |
+| **Causal Mask** | Mask upper-triangle with `-inf` | None | Ensures autoregressive generation (cannot look ahead) |
+| **Attention Dropout** | Zero-out attention weights with rate `p` | None | Regularization against overfitting |
+| **Multi-Head Attention** | Split into `h` heads, batched attn, concat, `W_O` | `W_Q, W_K, W_V, W_O` | Simultaneously captures multiple linguistic relationships |
