@@ -147,10 +147,39 @@ static void check_softmax_edge_cases(void)
     CHECK(masked[1] == 0 && masked[3] == 0);
 }
 
+/* Section 3.6.2: for a of shape (1, 2, 3, 4), a @ a.transpose(2, 3)
+ * multiplies each head's [3 x 4] matrix by its own transpose. */
+static void check_batched_matmul(void)
+{
+    static const float a[2 * 3 * 4] = {
+        0.2745f, 0.6584f, 0.2775f, 0.8573f,
+        0.8993f, 0.0390f, 0.9268f, 0.7388f,
+        0.7179f, 0.7058f, 0.9156f, 0.4340f,
+
+        0.0772f, 0.3565f, 0.1479f, 0.5331f,
+        0.4066f, 0.2318f, 0.4545f, 0.9737f,
+        0.4606f, 0.5159f, 0.4220f, 0.5786f,
+    };
+    static const float book[2 * 3 * 3] = {
+        1.3208f, 1.1631f, 1.2879f,
+        1.1631f, 2.2150f, 1.8424f,
+        1.2879f, 1.8424f, 2.0402f,
+
+        0.4391f, 0.7003f, 0.5903f,
+        0.7003f, 1.3737f, 1.0620f,
+        0.5903f, 1.0620f, 0.9912f,
+    };
+    float out[2 * 3 * 3];
+    for (size_t h = 0; h < 2; h++)
+        matmul_bt(&out[h * 3 * 3], &a[h * 3 * 4], &a[h * 3 * 4], 3, 4, 3);
+    CHECK(floats_close(out, book, 2 * 3 * 3, BOOK_TOL));
+}
+
 int main(void)
 {
     check_shapes();
     check_simple_attention();
     check_softmax_edge_cases();
+    check_batched_matmul();
     return test_report("test_ops");
 }

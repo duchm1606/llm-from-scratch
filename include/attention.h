@@ -24,11 +24,13 @@
  * probability dropout, drawing from rng (section 3.5.2); a NULL rng means
  * evaluation mode, without dropout.
  *
- * weights is room for the [T x T] attention weights and is left holding
- * them. out must not overlap the inputs.
+ * Rows of q, k, v and out are ld >= d floats apart: ld = d for packed
+ * matrices, while multi-head attention passes d_out to work on one head's
+ * columns in place. weights is room for the [T x T] attention weights and
+ * is left holding them. out must not overlap the inputs.
  */
 void attention_forward(float *out, float *weights, const float *q, const float *k, const float *v,
-                       size_t T, size_t d, bool causal, double dropout, Rng *rng);
+                       size_t T, size_t d, size_t ld, bool causal, double dropout, Rng *rng);
 
 /*
  * Single-head self-attention with trainable weights: three nn.Linear(d_in,
@@ -61,5 +63,40 @@ size_t self_attention_scratch_size(const SelfAttention *sa, size_t T);
  */
 void self_attention_forward(float *out, const float *x, size_t B, size_t T,
                             const SelfAttention *sa, float *scratch, Rng *rng);
+
+/*
+ * Multi-head causal attention, MultiHeadAttention (section 3.6.2). The
+ * query, key and value projections to d_out dimensions are split into
+ * num_heads heads of head_dim = d_out / num_heads columns, each head attends
+ * on its own, and out_proj, an nn.Linear(d_out, d_out), mixes the heads'
+ * concatenated context vectors. As with view and transpose in PyTorch, the
+ * split is only indexing: head h owns columns [h * head_dim, (h + 1) *
+ * head_dim) of every row. The struct points at caller-owned arrays in
+ * nn.Linear's layout.
+ */
+typedef struct {
+    size_t d_in, d_out, num_heads;    /* num_heads must divide d_out */
+    float *w_query, *w_key, *w_value; /* [d_out x d_in] each */
+    float *b_query, *b_key, *b_value; /* [d_out] each, or NULL for qkv_bias=False */
+    float *w_out, *b_out;             /* out_proj: [d_out x d_out] and [d_out] */
+    double dropout;                   /* rate on the attention weights */
+} MultiHeadAttention;
+
+/* MultiHeadAttention's initialization: linear_init on W_query, W_key,
+ * W_value and out_proj, in that order. */
+void multi_head_attention_init(const MultiHeadAttention *mha, Rng *rng);
+
+/* Floats of scratch multi_head_attention_forward needs for T tokens,
+ * whatever the batch size. */
+size_t multi_head_attention_scratch_size(const MultiHeadAttention *mha, size_t T);
+
+/*
+ * Multi-head attention over a batch x [B x T x d_in], giving out
+ * [B x T x d_out]. Dropout draws from rng in the order of PyTorch's
+ * [B x num_heads x T x T] attention weights; a NULL rng means evaluation
+ * mode.
+ */
+void multi_head_attention_forward(float *out, const float *x, size_t B, size_t T,
+                                  const MultiHeadAttention *mha, float *scratch, Rng *rng);
 
 #endif
