@@ -1,6 +1,7 @@
 #ifndef LLM_ATTENTION_H
 #define LLM_ATTENTION_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "rng.h"
@@ -11,17 +12,23 @@
  */
 
 /*
- * Scaled dot-product attention over T tokens (section 3.4.1), with queries,
- * keys and values q, k and v of [T x d] each:
+ * Scaled dot-product attention over T tokens (sections 3.4-3.5), with
+ * queries, keys and values q, k and v of [T x d] each:
  *
- *   weights = softmax(q @ k.T / sqrt(d))    [T x T]
- *   out     = weights @ v                   [T x d]
+ *   weights = dropout(softmax(mask(q @ k.T) / sqrt(d)))    [T x T]
+ *   out     = weights @ v                                 [T x d]
+ *
+ * With causal, mask sets the score of token i for every later token j > i
+ * to -inf, so each token attends only to itself and earlier tokens (section
+ * 3.5.1); otherwise it does nothing. dropout is dropout_forward with
+ * probability dropout, drawing from rng (section 3.5.2); a NULL rng means
+ * evaluation mode, without dropout.
  *
  * weights is room for the [T x T] attention weights and is left holding
  * them. out must not overlap the inputs.
  */
 void attention_forward(float *out, float *weights, const float *q, const float *k, const float *v,
-                       size_t T, size_t d);
+                       size_t T, size_t d, bool causal, double dropout, Rng *rng);
 
 /*
  * Self-attention with trainable weights, SelfAttention_v2 (section 3.4.2):

@@ -121,3 +121,8 @@ void rng_normal(Rng *rng, float *out, size_t n, float mean, float std)
         out[i] = (float)(z * std + mean);
     }
 }
+
+bool rng_bernoulli(Rng *rng, double p)
+{
+    return uniform_double(rng) < p;
+}

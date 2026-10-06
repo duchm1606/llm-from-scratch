@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "attention.h"
 #include "ch03_inputs.h"
+#include "linear.h"
 #include "ops.h"
 #include "rng.h"
 #include "test_util.h"
@@ -85,7 +87,7 @@ static void check_v1(void)
     /* attn_weights_2 and context_vec_2 are row 2 of attention over all
      * queries at once. */
     float weights[T * T], context[T * D_OUT];
-    attention_forward(context, weights, queries, keys, values, T, D_OUT);
+    attention_forward(context, weights, queries, keys, values, T, D_OUT, false, 0, NULL);
     CHECK(floats_close(&weights[1 * T],
                        (float[]){0.1500f, 0.2264f, 0.2199f, 0.1311f, 0.0906f, 0.1820f}, T,
                        BOOK_TOL));
@@ -158,7 +160,7 @@ static void check_v2(void)
     matmul(keys, inputs, w_t[1], T, D_IN, D_OUT);
     matmul(values, inputs, w_t[2], T, D_IN, D_OUT);
     float weights[T * T], v1_out[T * D_OUT];
-    attention_forward(v1_out, weights, queries, keys, values, T, D_OUT);
+    attention_forward(v1_out, weights, queries, keys, values, T, D_OUT, false, 0, NULL);
     CHECK(floats_close(v1_out, out, T * D_OUT, TOL));
 }
 
@@ -191,10 +193,156 @@ static void check_qkv_bias(void)
     CHECK(floats_close(out, want, T * D_OUT, TOL));
 }
 
+/* Queries, keys and values for x from SelfAttention_v2 at seed 789, which
+ * section 3.5 reuses. */
+static void v2_projections(float *queries, float *keys, float *values, const float *x)
+{
+    float w[3][D_OUT * D_IN];
+    SelfAttention sa = {.d_in = D_IN, .d_out = D_OUT, .w_query = w[0], .w_key = w[1], .w_value = w[2]};
+    Rng rng;
+    rng_seed(&rng, 789);
+    self_attention_init(&sa, &rng);
+    linear_forward(queries, x, T, sa.w_query, NULL, D_IN, D_OUT);
+    linear_forward(keys, x, T, sa.w_key, NULL, D_IN, D_OUT);
+    linear_forward(values, x, T, sa.w_value, NULL, D_IN, D_OUT);
+}
+
+/* Causal attention weights at seed 789 (section 3.5.1). */
+static const float book_causal[T * T] = {
+    1.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f,
+    0.5517f, 0.4483f, 0.0000f, 0.0000f, 0.0000f, 0.0000f,
+    0.3800f, 0.3097f, 0.3103f, 0.0000f, 0.0000f, 0.0000f,
+    0.2758f, 0.2460f, 0.2462f, 0.2319f, 0.0000f, 0.0000f,
+    0.2175f, 0.1983f, 0.1984f, 0.1888f, 0.1971f, 0.0000f,
+    0.1935f, 0.1663f, 0.1666f, 0.1542f, 0.1666f, 0.1529f,
+};
+static const float torch_causal[T * T] = {
+    1,            0,            0,            0,            0,            0,
+    0.551678061f, 0.448321968f, 0,            0,            0,            0,
+    0.379967242f, 0.309713542f, 0.310319275f, 0,            0,            0,
+    0.275842845f, 0.246028453f, 0.246247143f, 0.231881544f, 0,            0,
+    0.217515364f, 0.198280916f, 0.198397934f, 0.188752919f, 0.197052807f, 0,
+    0.193472371f, 0.16633299f,  0.166568086f, 0.154186234f, 0.166560829f, 0.152879536f,
+};
+
+/* Section 3.5.1: masking SelfAttention_v2's attention weights. */
+static void check_causal(void)
+{
+    float queries[T * D_OUT], keys[T * D_OUT], values[T * D_OUT];
+    v2_projections(queries, keys, values, inputs);
+
+    /* attn_weights before masking */
+    static const float book_weights[T * T] = {
+        0.1921f, 0.1646f, 0.1652f, 0.1550f, 0.1721f, 0.1510f,
+        0.2041f, 0.1659f, 0.1662f, 0.1496f, 0.1665f, 0.1477f,
+        0.2036f, 0.1659f, 0.1662f, 0.1498f, 0.1664f, 0.1480f,
+        0.1869f, 0.1667f, 0.1668f, 0.1571f, 0.1661f, 0.1564f,
+        0.1830f, 0.1669f, 0.1670f, 0.1588f, 0.1658f, 0.1585f,
+        0.1935f, 0.1663f, 0.1666f, 0.1542f, 0.1666f, 0.1529f,
+    };
+    float weights[T * T], context[T * D_OUT];
+    attention_forward(context, weights, queries, keys, values, T, D_OUT, false, 0, NULL);
+    CHECK(floats_close(weights, book_weights, T * T, BOOK_TOL));
+    float unmasked_last[D_OUT];
+    memcpy(unmasked_last, &context[(T - 1) * D_OUT], sizeof unmasked_last);
+
+    /* masked_simple_norm: zero the weights above the diagonal, then
+     * renormalize each row. */
+    float renormalized[T * T];
+    for (size_t i = 0; i < T; i++) {
+        float sum = 0;
+        for (size_t j = 0; j < T; j++) {
+            renormalized[i * T + j] = j <= i ? weights[i * T + j] : 0;
+            sum += renormalized[i * T + j];
+        }
+        for (size_t j = 0; j < T; j++)
+            renormalized[i * T + j] /= sum;
+    }
+    CHECK(floats_close(renormalized, book_causal, T * T, BOOK_TOL));
+
+    /* The efficient way: -inf scores above the diagonal, then the softmax.
+     * Both ways agree, so the masked tokens leak nothing. */
+    attention_forward(context, weights, queries, keys, values, T, D_OUT, true, 0, NULL);
+    CHECK(floats_close(weights, book_causal, T * T, BOOK_TOL));
+    CHECK(floats_close(weights, torch_causal, T * T, TOL));
+    CHECK(floats_close(weights, renormalized, T * T, TOL));
+
+    /* context_vec = attn_weights @ values */
+    static const float torch_context[T * D_OUT] = {
+        -0.0872180834f, 0.0285899844f,
+        -0.0990691483f, 0.0500948392f,
+        -0.0999450088f, 0.0633498728f,
+        -0.0982549042f, 0.0489481352f,
+        -0.0514459163f, 0.109843709f,
+        -0.0754442811f, 0.0693049207f,
+    };
+    CHECK(floats_close(context, torch_context, T * D_OUT, TOL));
+
+    /* The last token sees every token, masked or not. */
+    CHECK(memcmp(&context[(T - 1) * D_OUT], unmasked_last, sizeof unmasked_last) == 0);
+
+    /* Changing the last token changes its own context vector and no other. */
+    float changed[T * D_IN], changed_context[T * D_OUT];
+    memcpy(changed, inputs, sizeof changed);
+    for (size_t c = 0; c < D_IN; c++)
+        changed[(T - 1) * D_IN + c] += 1;
+    v2_projections(queries, keys, values, changed);
+    attention_forward(changed_context, weights, queries, keys, values, T, D_OUT, true, 0, NULL);
+    CHECK(memcmp(changed_context, context, (T - 1) * D_OUT * sizeof(float)) == 0);
+    CHECK(memcmp(&changed_context[(T - 1) * D_OUT], &context[(T - 1) * D_OUT],
+                 D_OUT * sizeof(float)) != 0);
+}
+
+/* Section 3.5.2: torch.manual_seed(123), then nn.Dropout(0.5) on the causal
+ * attention weights. */
+static void check_dropout(void)
+{
+    float queries[T * D_OUT], keys[T * D_OUT], values[T * D_OUT];
+    v2_projections(queries, keys, values, inputs);
+
+    static const float book_dropped[T * T] = {
+        2.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f,
+        0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f, 0.0000f,
+        0.7599f, 0.6194f, 0.6206f, 0.0000f, 0.0000f, 0.0000f,
+        0.0000f, 0.4921f, 0.4925f, 0.0000f, 0.0000f, 0.0000f,
+        0.0000f, 0.3966f, 0.0000f, 0.3775f, 0.0000f, 0.0000f,
+        0.0000f, 0.3327f, 0.3331f, 0.3084f, 0.3331f, 0.0000f,
+    };
+    static const float torch_dropped[T * T] = {
+        2, 0,            0,            0,            0,            0,
+        0, 0,            0,            0,            0,            0,
+        0.759934485f, 0.619427085f, 0.620638549f, 0, 0,            0,
+        0, 0.492056906f, 0.492494285f, 0,            0,            0,
+        0, 0.396561831f, 0,            0.377505839f, 0,            0,
+        0, 0.33266598f,  0.333136171f, 0.308372468f, 0.333121657f, 0,
+    };
+    static const float torch_context[T * D_OUT] = {
+        -0.174436167f,  0.0571799688f,
+        0,              0,
+        -0.199890018f,  0.126699746f,
+        -0.106082864f,  0.083339341f,
+        -0.0795107409f, 0.0293701198f,
+        -0.0534033291f, 0.174804777f,
+    };
+    float weights[T * T], context[T * D_OUT];
+    Rng rng;
+    rng_seed(&rng, 123);
+    attention_forward(context, weights, queries, keys, values, T, D_OUT, true, 0.5, &rng);
+    CHECK(floats_close(weights, book_dropped, T * T, BOOK_TOL));
+    CHECK(floats_close(weights, torch_dropped, T * T, TOL));
+    CHECK(floats_close(context, torch_context, T * D_OUT, TOL));
+
+    /* A NULL rng is evaluation mode: no dropout, whatever the rate. */
+    attention_forward(context, weights, queries, keys, values, T, D_OUT, true, 0.5, NULL);
+    CHECK(floats_close(weights, torch_causal, T * T, TOL));
+}
+
 int main(void)
 {
     check_v1();
     check_v2();
     check_qkv_bias();
+    check_causal();
+    check_dropout();
     return test_report("test_attention");
 }

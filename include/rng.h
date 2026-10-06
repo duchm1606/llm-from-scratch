@@ -13,6 +13,7 @@
  *   torch.rand(n)                 rng_uniform(&rng, out, n, 0, 1)
  *   tensor.uniform_(lo, hi)       rng_uniform(&rng, out, n, lo, hi)
  *   torch.randn(n), normal_()     rng_normal(&rng, out, n, 0, 1)
+ *   tensor.bernoulli_(p)          rng_bernoulli(&rng, p), once per element
  *
  * The same sequence of calls gives the same float32 numbers as in PyTorch, up
  * to last-bit differences between math libraries. Underneath is the 32-bit
@@ -45,5 +46,12 @@ void rng_uniform(Rng *rng, float *out, size_t n, float lo, float hi);
 
 /* Fills out with normal samples, like tensor.normal_(mean, std). */
 void rng_normal(Rng *rng, float *out, size_t n, float mean, float std);
+
+/* True with probability p: one element of tensor.bernoulli_(p), which draws
+ * a double uniform per element and compares it with p. That is PyTorch's
+ * path without MKL, as on Apple silicon, and the one the book's dropout
+ * numbers match; x86 builds with MKL draw differently, which is why the book
+ * warns that dropout output varies by OS. */
+bool rng_bernoulli(Rng *rng, double p);
 
 #endif
