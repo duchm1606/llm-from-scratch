@@ -31,26 +31,35 @@ void attention_forward(float *out, float *weights, const float *q, const float *
                        size_t T, size_t d, bool causal, double dropout, Rng *rng);
 
 /*
- * Self-attention with trainable weights, SelfAttention_v2 (section 3.4.2):
- * three nn.Linear(d_in, d_out) layers project the input to queries, keys and
- * values for attention_forward. The struct points at caller-owned arrays in
- * nn.Linear's layout.
+ * Single-head self-attention with trainable weights: three nn.Linear(d_in,
+ * d_out) layers project the input to queries, keys and values for
+ * attention_forward. With causal and dropout left 0 this is SelfAttention_v2
+ * (section 3.4.2); with causal set it is CausalAttention (section 3.5.3),
+ * whose mask buffer the index test in attention_forward replaces. The struct
+ * points at caller-owned arrays in nn.Linear's layout.
  */
 typedef struct {
     size_t d_in, d_out;
     float *w_query, *w_key, *w_value; /* [d_out x d_in] each */
     float *b_query, *b_key, *b_value; /* [d_out] each, or NULL for qkv_bias=False */
+    bool causal;
+    double dropout; /* rate on the attention weights */
 } SelfAttention;
 
-/* SelfAttention_v2's initialization: linear_init on W_query, W_key and
- * W_value, in that order. */
+/* Initialization of both classes: linear_init on W_query, W_key and W_value,
+ * in that order. */
 void self_attention_init(const SelfAttention *sa, Rng *rng);
 
-/* Floats of scratch self_attention_forward needs for T tokens. */
+/* Floats of scratch self_attention_forward needs for T tokens, whatever the
+ * batch size. */
 size_t self_attention_scratch_size(const SelfAttention *sa, size_t T);
 
-/* Self-attention over x [T x d_in], giving out [T x d_out]. */
-void self_attention_forward(float *out, const float *x, size_t T, const SelfAttention *sa,
-                            float *scratch);
+/*
+ * Self-attention over a batch x [B x T x d_in], giving out [B x T x d_out].
+ * Dropout draws from rng in the order of PyTorch's [B x T x T] attention
+ * weights; a NULL rng means evaluation mode.
+ */
+void self_attention_forward(float *out, const float *x, size_t B, size_t T,
+                            const SelfAttention *sa, float *scratch, Rng *rng);
 
 #endif

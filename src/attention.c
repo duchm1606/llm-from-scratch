@@ -33,16 +33,22 @@ size_t self_attention_scratch_size(const SelfAttention *sa, size_t T)
     return 3 * T * sa->d_out + T * T;
 }
 
-void self_attention_forward(float *out, const float *x, size_t T, const SelfAttention *sa,
-                            float *scratch)
+void self_attention_forward(float *out, const float *x, size_t B, size_t T,
+                            const SelfAttention *sa, float *scratch, Rng *rng)
 {
     size_t d_in = sa->d_in, d_out = sa->d_out;
     float *q = scratch;
     float *k = q + T * d_out;
     float *v = k + T * d_out;
     float *weights = v + T * d_out;
-    linear_forward(q, x, T, sa->w_query, sa->b_query, d_in, d_out);
-    linear_forward(k, x, T, sa->w_key, sa->b_key, d_in, d_out);
-    linear_forward(v, x, T, sa->w_value, sa->b_value, d_in, d_out);
-    attention_forward(out, weights, q, k, v, T, d_out, false, 0, NULL);
+    /* One sequence at a time: the projections act row by row, and dropout
+     * reaches each sequence's weights in turn, as in one [B x T x T] draw. */
+    for (size_t b = 0; b < B; b++) {
+        const float *x_b = x + b * T * d_in;
+        linear_forward(q, x_b, T, sa->w_query, sa->b_query, d_in, d_out);
+        linear_forward(k, x_b, T, sa->w_key, sa->b_key, d_in, d_out);
+        linear_forward(v, x_b, T, sa->w_value, sa->b_value, d_in, d_out);
+        attention_forward(out + b * T * d_out, weights, q, k, v, T, d_out, sa->causal, sa->dropout,
+                          rng);
+    }
 }

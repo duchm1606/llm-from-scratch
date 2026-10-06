@@ -18,9 +18,10 @@ enum { D_OUT = 2, GUARD = 16 };
 
 #define SENTINEL -1234.5f
 
-/* self_attention_forward on the chapter's inputs. GUARD sentinels follow the
- * scratch it asks for and must come back untouched. */
-static void run_self_attention(float *out, const SelfAttention *sa)
+/* self_attention_forward on B sequences of T tokens. GUARD sentinels follow
+ * the scratch it asks for and must come back untouched. */
+static void run_self_attention(float *out, const float *x, size_t B, const SelfAttention *sa,
+                               Rng *rng)
 {
     size_t n = self_attention_scratch_size(sa, T);
     float *scratch = malloc(sizeof(float) * (n + GUARD));
@@ -31,7 +32,7 @@ static void run_self_attention(float *out, const SelfAttention *sa)
     }
     for (size_t i = 0; i < GUARD; i++)
         scratch[n + i] = SENTINEL;
-    self_attention_forward(out, inputs, T, sa, scratch);
+    self_attention_forward(out, x, B, T, sa, scratch, rng);
     bool intact = true;
     for (size_t i = 0; i < GUARD; i++)
         intact &= scratch[n + i] == SENTINEL;
@@ -144,7 +145,7 @@ static void check_v2(void)
         -0.0754442811f, 0.0693049207f,
     };
     float out[T * D_OUT];
-    run_self_attention(out, &sa);
+    run_self_attention(out, inputs, 1, &sa, NULL);
     CHECK(floats_close(out, book_v2, T * D_OUT, BOOK_TOL));
     CHECK(floats_close(out, torch_v2, T * D_OUT, TOL));
 
@@ -189,7 +190,7 @@ static void check_qkv_bias(void)
         0.118761346f, 0.937503457f,
     };
     float out[T * D_OUT];
-    run_self_attention(out, &sa);
+    run_self_attention(out, inputs, 1, &sa, NULL);
     CHECK(floats_close(out, want, T * D_OUT, TOL));
 }
 
@@ -337,6 +338,83 @@ static void check_dropout(void)
     CHECK(floats_close(weights, torch_causal, T * T, TOL));
 }
 
+enum { B = 2 };
+
+/* Section 3.5.3: batch = torch.stack((inputs, inputs)), then
+ * torch.manual_seed(123) and CausalAttention(3, 2, 6, dropout). */
+static void check_causal_attention(void)
+{
+    float batch[B * T * D_IN];
+    memcpy(batch, inputs, sizeof inputs);
+    memcpy(batch + T * D_IN, inputs, sizeof inputs);
+
+    float w[3][D_OUT * D_IN];
+    SelfAttention ca = {
+        .d_in = D_IN, .d_out = D_OUT,
+        .w_query = w[0], .w_key = w[1], .w_value = w[2],
+        .causal = true,
+    };
+    Rng rng;
+    rng_seed(&rng, 123);
+    self_attention_init(&ca, &rng);
+
+    /* dropout = 0.0: context_vecs has shape [2, 6, 2]. */
+    static const float want[T * D_OUT] = {
+        -0.451920271f, 0.221604794f,
+        -0.587435067f, 0.00577611756f,
+        -0.630023062f, -0.0631825998f,
+        -0.567456722f, -0.0842531398f,
+        -0.55256182f,  -0.0980682001f,
+        -0.529900968f, -0.108067632f,
+    };
+    float out[B * T * D_OUT];
+    run_self_attention(out, batch, B, &ca, &rng);
+    CHECK(floats_close(out, want, T * D_OUT, TOL));
+    /* Both sequences are the same text, so they get the same context vectors. */
+    CHECK(memcmp(&out[T * D_OUT], out, T * D_OUT * sizeof(float)) == 0);
+
+    /* dropout = 0.5 in training mode: dropout continues drawing from the
+     * generator where initialization left it, and the two sequences get
+     * different masks. */
+    static const float want_dropout[B * T * D_OUT] = {
+        -0.903840542f, 0.443209589f,
+        -0.43679893f,  0.214189857f,
+        -0.484927803f, -0.134101912f,
+        -0.583358884f, 0.00813283492f,
+        -0.621864796f, -0.0526335314f,
+        -0.141713083f, -0.0504860617f,
+
+        0,             0,
+        -1.17487013f,  0.0115522351f,
+        -0.773255587f, 0.00728325034f,
+        -0.913953245f, -0.27685684f,
+        -0.767860651f, -0.0735368133f,
+        -0.674854577f, -0.0983852297f,
+    };
+    ca.dropout = 0.5;
+    rng_seed(&rng, 123);
+    self_attention_init(&ca, &rng);
+    run_self_attention(out, batch, B, &ca, &rng);
+    CHECK(floats_close(out, want_dropout, B * T * D_OUT, TOL));
+
+    /* ca.eval(): without dropout the rate makes no difference. */
+    run_self_attention(out, batch, B, &ca, NULL);
+    CHECK(floats_close(out, want, T * D_OUT, TOL));
+    CHECK(floats_close(&out[T * D_OUT], want, T * D_OUT, TOL));
+
+    /* With different sequences, each gets what it would get on its own. The
+     * second here is the first with its tokens reversed. */
+    float mixed[B * T * D_IN], alone[T * D_OUT];
+    memcpy(mixed, inputs, sizeof inputs);
+    for (size_t t = 0; t < T; t++)
+        memcpy(&mixed[(T + t) * D_IN], &inputs[(T - 1 - t) * D_IN], D_IN * sizeof(float));
+    run_self_attention(out, mixed, B, &ca, NULL);
+    for (size_t b = 0; b < B; b++) {
+        run_self_attention(alone, &mixed[b * T * D_IN], 1, &ca, NULL);
+        CHECK(memcmp(&out[b * T * D_OUT], alone, sizeof alone) == 0);
+    }
+}
+
 int main(void)
 {
     check_v1();
@@ -344,5 +422,6 @@ int main(void)
     check_qkv_bias();
     check_causal();
     check_dropout();
+    check_causal_attention();
     return test_report("test_attention");
 }
