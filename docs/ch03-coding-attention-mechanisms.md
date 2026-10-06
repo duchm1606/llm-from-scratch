@@ -275,23 +275,38 @@ Concatenating head outputs simply places vectors side-by-side. The learned weigh
 
 ### 4. Implementation Perspective in Pure C
 
-In C, multidimensional tensors are contiguous 1D flat arrays in **Row-Major** layout:
+In C, multidimensional tensors are contiguous 1D flat arrays in **Row-Major** layout. This repo keeps the projections in the layout `nn.Linear` produces, `[B, T, C]` = `[B, T, h, d_head]`, and never performs the transposes (steps 2 and 6) or the view (step 7) of the pipeline above:
 
 ```c
-/* Q[b][h][t][d] index formula: */
-size_t idx = b * (h * T * d_head) + head * (T * d_head) + t * d_head + d;
+/* Q[b][t][head][d] index formula: */
+size_t idx = b * (T * C) + t * C + head * d_head + d;
 ```
 
-**Cache-Friendly Optimization without Physical Transpose of K:**
-Instead of physically transposing `K` into a temporary buffer, compute the dot product between row `i` of `Q` and row `j` of `K` directly:
+**Splitting Heads without Copying:**
+Head `head` owns columns `[head * d_head, (head + 1) * d_head)` of every row. `attention_forward` takes a row stride `ld`, so `multi_head_attention_forward` (`src/attention.c`) hands each head a pointer to its first column with `ld = C`:
 
 ```c
-float score = 0.0f;
-for (size_t d = 0; d < d_head; d++) {
-    score += q_head[i * d_head + d] * k_head[j * d_head + d];
+for (size_t h = 0; h < mha->num_heads; h++) {
+    size_t col = h * head_dim;
+    attention_forward(context + col, weights, q + col, k + col, v + col,
+                      T, head_dim, d_out, true, mha->dropout, rng);
 }
 ```
-Both vectors are accessed with unit stride (`stride = 1`), maximizing CPU L1 cache line hits and enabling auto-vectorization (SIMD / AVX2).
+
+Each head writes its context vectors into the same columns of `context`, so after the loop the heads already sit side by side as `[T, C]`, ready for the output projection `W_O`.
+
+**No Physical Transpose of K:**
+Instead of building `K.T` in a temporary buffer, compute the dot product between row `i` of `Q` and row `j` of `K` directly, both rows `ld` floats apart:
+
+```c
+const float *q_i = q + i * ld;
+const float *k_j = k + j * ld;
+float dot = 0;
+for (size_t c = 0; c < d; c++)
+    dot += q_i[c] * k_j[c];
+```
+
+Within a row both vectors are read with unit stride, which keeps the inner loop cache-friendly and easy to auto-vectorize (SIMD). With the causal mask, `attention_forward` computes scores only for `j <= i` and sets the rest to `-inf` directly.
 
 ---
 
