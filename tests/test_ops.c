@@ -1,6 +1,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "ch03_inputs.h"
 #include "ops.h"
 #include "test_util.h"
 
@@ -8,18 +9,6 @@
  * four decimals. */
 #define TOL 1e-6f
 #define BOOK_TOL 5e-5f
-
-enum { T = 6, D = 3 };
-
-/* Section 3.3.1: "Your journey starts with one step" as 3-d embeddings. */
-static const float inputs[T * D] = {
-    0.43f, 0.15f, 0.89f, /* Your    */
-    0.55f, 0.87f, 0.66f, /* journey */
-    0.57f, 0.85f, 0.64f, /* starts  */
-    0.22f, 0.58f, 0.33f, /* with    */
-    0.77f, 0.25f, 0.10f, /* one     */
-    0.05f, 0.80f, 0.55f, /* step    */
-};
 
 static void check_shapes(void)
 {
@@ -52,8 +41,8 @@ static void check_shapes(void)
 static void check_simple_attention(void)
 {
     /* attn_scores_2[i] = torch.dot(x_i, query) */
-    float scores_2[T], context_2[D];
-    matmul_bt(scores_2, &inputs[1 * D], inputs, 1, D, T);
+    float scores_2[T], context_2[D_IN];
+    matmul_bt(scores_2, &inputs[1 * D_IN], inputs, 1, D_IN, T);
     CHECK(floats_close(scores_2, (float[]){0.9544f, 1.4950f, 1.4754f, 0.8434f, 0.7070f, 1.0865f},
                        T, BOOK_TOL));
 
@@ -63,8 +52,8 @@ static void check_simple_attention(void)
                        T, BOOK_TOL));
 
     /* context_vec_2 = sum of attn_weights_2[i] * x_i */
-    matmul(context_2, scores_2, inputs, 1, T, D);
-    CHECK(floats_close(context_2, (float[]){0.4419f, 0.6515f, 0.5683f}, D, BOOK_TOL));
+    matmul(context_2, scores_2, inputs, 1, T, D_IN);
+    CHECK(floats_close(context_2, (float[]){0.4419f, 0.6515f, 0.5683f}, D_IN, BOOK_TOL));
 
     /* attn_scores = inputs @ inputs.T */
     static const float book_scores[T * T] = {
@@ -83,8 +72,8 @@ static void check_simple_attention(void)
         0.457599968f, 0.707000017f, 0.715399981f, 0.34739998f,  0.665399969f, 0.293500006f,
         0.631000042f, 1.08650005f,  1.06050003f,  0.656499982f, 0.293500006f, 0.945000052f,
     };
-    float weights[T * T], context[T * D];
-    matmul_bt(weights, inputs, inputs, T, D, T);
+    float weights[T * T], context[T * D_IN];
+    matmul_bt(weights, inputs, inputs, T, D_IN, T);
     CHECK(floats_close(weights, book_scores, T * T, BOOK_TOL));
     CHECK(floats_close(weights, torch_scores, T * T, TOL));
 
@@ -116,7 +105,7 @@ static void check_simple_attention(void)
     }
 
     /* all_context_vecs = attn_weights @ inputs */
-    static const float book_context[T * D] = {
+    static const float book_context[T * D_IN] = {
         0.4421f, 0.5931f, 0.5790f,
         0.4419f, 0.6515f, 0.5683f,
         0.4431f, 0.6496f, 0.5671f,
@@ -124,7 +113,7 @@ static void check_simple_attention(void)
         0.4671f, 0.5910f, 0.5266f,
         0.4177f, 0.6503f, 0.5645f,
     };
-    static const float torch_context[T * D] = {
+    static const float torch_context[T * D_IN] = {
         0.442059427f, 0.59309864f,  0.578989148f,
         0.441865742f, 0.651481986f, 0.56830889f,
         0.443127543f, 0.649594665f, 0.567073107f,
@@ -132,12 +121,12 @@ static void check_simple_attention(void)
         0.467101753f, 0.590992808f, 0.526596546f,
         0.41772449f,  0.650323212f, 0.56453526f,
     };
-    matmul(context, weights, inputs, T, T, D);
-    CHECK(floats_close(context, book_context, T * D, BOOK_TOL));
-    CHECK(floats_close(context, torch_context, T * D, TOL));
+    matmul(context, weights, inputs, T, T, D_IN);
+    CHECK(floats_close(context, book_context, T * D_IN, BOOK_TOL));
+    CHECK(floats_close(context, torch_context, T * D_IN, TOL));
 
     /* Row 2 is context_vec_2 exactly: each row is computed independently. */
-    CHECK(memcmp(&context[1 * D], context_2, sizeof context_2) == 0);
+    CHECK(memcmp(&context[1 * D_IN], context_2, sizeof context_2) == 0);
 }
 
 static void check_softmax_edge_cases(void)
