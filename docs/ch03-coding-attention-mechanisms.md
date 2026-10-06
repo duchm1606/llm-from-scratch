@@ -162,6 +162,13 @@ To prevent overfitting during training, randomly set some attention weights to 0
 
 ![Dropout on attention weights](../public/ch03/figure-3-22.png)
 
+#### Training vs. Evaluation Mode
+Dropout is only active during **training**. During inference (generating text) or evaluation (computing validation loss), dropout is disabled to ensure deterministic outputs:
+- **PyTorch:** Toggled via `model.train()` vs. `model.eval()`.
+- **C Implementation in this repo:**
+  - **Training mode:** Pass a valid PRNG pointer (`Rng *rng`) to draw Bernoulli dropout masks.
+  - **Evaluation mode:** Pass `rng = NULL` — `attention_forward` skips dropout entirely regardless of the configured rate.
+
 ### 3.5.3 The Single-Head Causal Class in C
 In this repository, the single-head causal attention module corresponds to the `SelfAttention` struct in `include/attention.h`:
 
