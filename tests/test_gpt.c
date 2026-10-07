@@ -41,6 +41,28 @@ static void run_gpt(float *logits, const int *ids, size_t B, size_t T, const GPT
     free(scratch);
 }
 
+/* generate_text_simple in guarded scratch, as run_gpt. */
+static size_t run_generate(int *ids, size_t n, size_t max_new_tokens, size_t context_size,
+                           const GPTModel *model)
+{
+    size_t size = generate_scratch_size(model, context_size);
+    float *scratch = malloc(sizeof(float) * (size + GUARD));
+    if (!scratch) {
+        fprintf(stderr, "FAIL out of memory\n");
+        failures++;
+        return 0;
+    }
+    for (size_t i = 0; i < GUARD; i++)
+        scratch[size + i] = SENTINEL;
+    n = generate_text_simple(ids, n, max_new_tokens, context_size, model, scratch);
+    bool intact = true;
+    for (size_t i = 0; i < GUARD; i++)
+        intact &= scratch[size + i] == SENTINEL;
+    CHECK(intact);
+    free(scratch);
+    return n;
+}
+
 /* Section 4.6 and exercise 4.2: parameter counts and sizes. */
 static void check_sizes(void)
 {
@@ -144,12 +166,49 @@ static void check_small(void)
     CHECK(floats_close(logits, train, B * T * V, TOL));
     run_gpt(logits, ids, B, T, &model, NULL);
     CHECK(floats_close(logits, eval, B * T * V, TOL));
+
+    /* generate_text_simple(model, [[1, 4, 10]], 6, context_size): with the
+     * full context of 5 tokens the window slides once the sequence
+     * outgrows it, and with 2 the model sees only the last two tokens. */
+    int gen[3 + 6] = {1, 4, 10};
+    CHECK(run_generate(gen, 3, 6, 5, &model) == 9);
+    CHECK(memcmp(gen, (int[]){1, 4, 10, 5, 0, 4, 3, 2, 3}, sizeof gen) == 0);
+    CHECK(run_generate(gen, 3, 6, 2, &model) == 9);
+    CHECK(memcmp(gen, (int[]){1, 4, 10, 6, 5, 0, 0, 0, 0}, sizeof gen) == 0);
     free(params);
+}
+
+/* Section 4.7 on section 4.6's model: model.eval(), then six greedy tokens
+ * after "Hello, I am". Untrained, the model continues with gibberish. */
+static void check_generate(const GPTModel *model, const Tokenizer *tok)
+{
+    enum { NEW = 6 };
+    static const char start_context[] = "Hello, I am";
+    size_t n;
+    int *encoded = tokenizer_encode(tok, start_context, strlen(start_context), false, &n);
+    CHECK(encoded && n == 4);
+    if (!encoded || n != 4) {
+        free(encoded);
+        return;
+    }
+    int ids[4 + NEW];
+    memcpy(ids, encoded, sizeof(int) * n);
+    free(encoded);
+    CHECK(memcmp(ids, (int[]){15496, 11, 314, 716}, sizeof(int) * 4) == 0);
+
+    n = run_generate(ids, n, NEW, model->cfg.context_length, model);
+    CHECK(n == 10);
+    CHECK(memcmp(ids, (int[]){15496, 11, 314, 716, 27018, 24086, 47843, 30961, 42348, 7267},
+                 sizeof ids) == 0);
+    char *text = tokenizer_decode(tok, ids, n, NULL);
+    CHECK(text && strcmp(text, "Hello, I am Featureiman Byeswickattribute argue") == 0);
+    free(text);
 }
 
 /* Sections 4.1 and 4.6: torch.manual_seed(123); model =
  * GPTModel(GPT_CONFIG_124M); out = model(batch), in training mode, on
- * "Every effort moves you" and "Every day holds a". */
+ * "Every effort moves you" and "Every day holds a"; then section 4.7 with
+ * the same model. */
 static void check_gpt2_small(void)
 {
     enum { B = 2, T = 4 };
@@ -228,6 +287,8 @@ static void check_gpt2_small(void)
                        DEEP_TOL));
     CHECK(floats_close(&logits[B * T * V - 3],
                        (float[]){1.19152117f, -0.164312929f, 0.0370460413f}, 3, DEEP_TOL));
+
+    check_generate(&model, tok);
 
 done:
     tokenizer_free(tok);

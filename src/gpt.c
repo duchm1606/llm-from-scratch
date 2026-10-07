@@ -65,8 +65,10 @@ size_t gpt_scratch_size(const GPTModel *model, size_t B, size_t T)
     return 2 * B * T * model->cfg.emb_dim + transformer_block_scratch_size(&tb, B, T);
 }
 
-void gpt_forward(float *logits, const int *ids, size_t B, size_t T, const GPTModel *model,
-                 float *scratch, Rng *rng)
+/* Embeddings and the blocks on a batch, leaving their output [B x T x
+ * emb_dim] in scratch and returning where. */
+static float *gpt_hidden(const int *ids, size_t B, size_t T, const GPTModel *model,
+                         float *scratch, Rng *rng)
 {
     const GPTConfig *cfg = &model->cfg;
     size_t d = cfg->emb_dim, n = B * T;
@@ -85,6 +87,47 @@ void gpt_forward(float *logits, const int *ids, size_t B, size_t T, const GPTMod
         x = y;
         y = t;
     }
+    return x;
+}
+
+void gpt_forward(float *logits, const int *ids, size_t B, size_t T, const GPTModel *model,
+                 float *scratch, Rng *rng)
+{
+    const GPTConfig *cfg = &model->cfg;
+    size_t n = B * T;
+    float *x = gpt_hidden(ids, B, T, model, scratch, rng);
     layernorm_forward(x, x, n, &model->final_norm);
-    linear_forward(logits, x, n, model->out_head, NULL, d, cfg->vocab_size);
+    linear_forward(logits, x, n, model->out_head, NULL, cfg->emb_dim, cfg->vocab_size);
+}
+
+size_t generate_scratch_size(const GPTModel *model, size_t context_size)
+{
+    return gpt_scratch_size(model, 1, context_size) + model->cfg.vocab_size;
+}
+
+size_t generate_text_simple(int *ids, size_t n, size_t max_new_tokens, size_t context_size,
+                            const GPTModel *model, float *scratch)
+{
+    const GPTConfig *cfg = &model->cfg;
+    size_t d = cfg->emb_dim, V = cfg->vocab_size;
+    float *logits = scratch;
+    float *rest = logits + V;
+    for (size_t step = 0; step < max_new_tokens; step++) {
+        /* Crop the context to its last context_size tokens. */
+        size_t T = n < context_size ? n : context_size;
+        float *x = gpt_hidden(ids + n - T, 1, T, model, rest, NULL);
+        /* Only the last token's logits pick the next token, so the final
+         * norm and out_head run on that row alone. */
+        float *last = x + (T - 1) * d;
+        layernorm_forward(last, last, 1, &model->final_norm);
+        linear_forward(logits, last, 1, model->out_head, NULL, d, V);
+        /* Greedy decoding: the first highest logit, as torch.argmax picks.
+         * The book's softmax first would not change the order. */
+        size_t best = 0;
+        for (size_t v = 1; v < V; v++)
+            if (logits[v] > logits[best])
+                best = v;
+        ids[n++] = (int)best;
+    }
+    return n;
 }

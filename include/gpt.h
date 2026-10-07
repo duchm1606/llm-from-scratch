@@ -74,4 +74,19 @@ size_t gpt_scratch_size(const GPTModel *model, size_t B, size_t T);
 void gpt_forward(float *logits, const int *ids, size_t B, size_t T, const GPTModel *model,
                  float *scratch, Rng *rng);
 
+/* Floats of scratch generate_text_simple needs for contexts of up to
+ * context_size tokens. */
+size_t generate_scratch_size(const GPTModel *model, size_t context_size);
+
+/*
+ * generate_text_simple (section 4.7, Listing 4.8): greedy decoding of one
+ * sequence in evaluation mode. Each of max_new_tokens steps runs the model
+ * on the last context_size tokens at most, context_size <= context_length,
+ * and appends the token with the highest logit at the last position. ids
+ * holds the n >= 1 tokens of the prompt and has room for max_new_tokens
+ * more; returns the new length, n + max_new_tokens.
+ */
+size_t generate_text_simple(int *ids, size_t n, size_t max_new_tokens, size_t context_size,
+                            const GPTModel *model, float *scratch);
+
 #endif
