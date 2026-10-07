@@ -170,16 +170,24 @@ Dropout is only active during **training**. During inference (generating text) o
   - **Evaluation mode:** Pass `rng = NULL` — `attention_forward` skips dropout entirely regardless of the configured rate.
 
 ### 3.5.3 The Single-Head Causal Class in C
-In this repository, the single-head causal attention module corresponds to the `SelfAttention` struct in `include/attention.h`:
+In this repository, `SelfAttention_v2` and `CausalAttention` are both the `SelfAttention` struct in [`include/attention.h`](../include/attention.h): left with `causal = false` and `dropout = 0` it is `SelfAttention_v2`; with `causal` set it is `CausalAttention`.
 
 ```c
+void attention_forward(float *out, float *weights, const float *q, const float *k, const float *v,
+                       size_t T, size_t d, size_t ld, bool causal, double dropout, Rng *rng);
+
 typedef struct {
     size_t d_in, d_out;
     float *w_query, *w_key, *w_value; /* [d_out x d_in] each */
-    float *b_query, *b_key, *b_value; /* [d_out] each, or NULL */
-    bool causal;                      /* true for CausalAttention */
-    double dropout;                   /* dropout rate on attention weights */
+    float *b_query, *b_key, *b_value; /* [d_out] each, or NULL for qkv_bias=False */
+    bool causal;
+    double dropout; /* rate on the attention weights */
 } SelfAttention;
+
+void self_attention_init(const SelfAttention *sa, Rng *rng);
+size_t self_attention_scratch_size(const SelfAttention *sa, size_t T);
+void self_attention_forward(float *out, const float *x, size_t B, size_t T,
+                            const SelfAttention *sa, float *scratch, Rng *rng);
 ```
 
 > **The Bottleneck of Single-Head Attention:**
@@ -275,38 +283,30 @@ Concatenating head outputs simply places vectors side-by-side. The learned weigh
 
 ### 4. Implementation Perspective in Pure C
 
-In C, multidimensional tensors are contiguous 1D flat arrays in **Row-Major** layout. This repo keeps the projections in the layout `nn.Linear` produces, `[B, T, C]` = `[B, T, h, d_head]`, and never performs the transposes (steps 2 and 6) or the view (step 7) of the pipeline above:
+In C, multidimensional tensors are contiguous 1D flat arrays in **Row-Major** layout. This repo keeps the projections in the layout `nn.Linear` produces, `[B, T, C]` = `[B, T, h, d_head]`, and never performs the transposes (steps 2 and 6) or the view (step 7) of the pipeline above. Element `Q[b][t][head][d]` sits at offset `b * T * C + t * C + head * d_head + d`.
+
+[`include/attention.h`](../include/attention.h):
 
 ```c
-/* Q[b][t][head][d] index formula: */
-size_t idx = b * (T * C) + t * C + head * d_head + d;
+typedef struct {
+    size_t d_in, d_out, num_heads;    /* num_heads must divide d_out */
+    float *w_query, *w_key, *w_value; /* [d_out x d_in] each */
+    float *b_query, *b_key, *b_value; /* [d_out] each, or NULL for qkv_bias=False */
+    float *w_out, *b_out;             /* out_proj: [d_out x d_out] and [d_out] */
+    double dropout;                   /* rate on the attention weights */
+} MultiHeadAttention;
+
+void multi_head_attention_init(const MultiHeadAttention *mha, Rng *rng);
+size_t multi_head_attention_scratch_size(const MultiHeadAttention *mha, size_t T);
+void multi_head_attention_forward(float *out, const float *x, size_t B, size_t T,
+                                  const MultiHeadAttention *mha, float *scratch, Rng *rng);
 ```
 
 **Splitting Heads without Copying:**
-Head `head` owns columns `[head * d_head, (head + 1) * d_head)` of every row. `attention_forward` takes a row stride `ld`, so `multi_head_attention_forward` (`src/attention.c`) hands each head a pointer to its first column with `ld = C`:
-
-```c
-for (size_t h = 0; h < mha->num_heads; h++) {
-    size_t col = h * head_dim;
-    attention_forward(context + col, weights, q + col, k + col, v + col,
-                      T, head_dim, d_out, true, mha->dropout, rng);
-}
-```
-
-Each head writes its context vectors into the same columns of `context`, so after the loop the heads already sit side by side as `[T, C]`, ready for the output projection `W_O`.
+Head `head` owns columns `[head * d_head, (head + 1) * d_head)` of every row. `attention_forward` takes a row stride `ld`, so `multi_head_attention_forward` hands each head a pointer to its first column of `q`, `k`, `v` and `context`, with `d = d_head` and `ld = C`. Each head writes its context vectors into the same columns of `context`, so after the loop over heads they already sit side by side as `[T, C]`, ready for the output projection `W_O`.
 
 **No Physical Transpose of K:**
-Instead of building `K.T` in a temporary buffer, compute the dot product between row `i` of `Q` and row `j` of `K` directly, both rows `ld` floats apart:
-
-```c
-const float *q_i = q + i * ld;
-const float *k_j = k + j * ld;
-float dot = 0;
-for (size_t c = 0; c < d; c++)
-    dot += q_i[c] * k_j[c];
-```
-
-Within a row both vectors are read with unit stride, which keeps the inner loop cache-friendly and easy to auto-vectorize (SIMD). With the causal mask, `attention_forward` computes scores only for `j <= i` and sets the rest to `-inf` directly.
+Instead of building `K.T` in a temporary buffer, `attention_forward` takes the dot product of row `i` of `Q` with row `j` of `K` directly, both rows `ld` floats apart. Within a row both vectors are read with unit stride, which keeps the inner loop cache-friendly and easy to auto-vectorize (SIMD). With the causal mask, it computes scores only for `j <= i` and sets the rest to `-inf` directly.
 
 ---
 
