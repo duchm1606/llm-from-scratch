@@ -27,4 +27,12 @@ void matmul_bt(float *out, const float *a, const float *b, size_t m, size_t k, s
  */
 void softmax_rows(float *x, size_t rows, size_t n);
 
+/*
+ * x += y elementwise on n floats: a shortcut (residual) connection, which
+ * adds a layer's input back to its output (section 4.4). The sum gives
+ * gradients a path around the layer, so they do not vanish in deep
+ * networks.
+ */
+void residual_add(float *x, const float *y, size_t n);
+
 #endif

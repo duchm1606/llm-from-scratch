@@ -51,3 +51,9 @@ void softmax_rows(float *x, size_t rows, size_t n)
             row[j] *= inv;
     }
 }
+
+void residual_add(float *x, const float *y, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        x[i] += y[i];
+}
