@@ -15,12 +15,12 @@ DATA        := data/gpt2/encoder.json data/gpt2/vocab.bpe data/the-verdict.txt
 UNICODE_VERSION := 16.0.0
 UNICODE_DATA    := data/UnicodeData-$(UNICODE_VERSION).txt
 
-# GPT-2 124M fine-tuned on Alpaca instructions.
+# GPT-2 124M fine-tuned on Alpaca instructions, for build/chat.
 WEIGHTS_URL := https://huggingface.co/vicgalle/gpt2-alpaca/resolve/main/model.safetensors
 WEIGHTS_SRC := data/gpt2-alpaca/model.safetensors
 WEIGHTS     := data/gpt2_alpaca.bin
 
-.PHONY: all test data weights unicode-tables clean
+.PHONY: all test data weights chat unicode-tables clean
 
 all: $(LIB)
 
@@ -45,6 +45,11 @@ data/gpt2/%:
 data/the-verdict.txt:
 	@mkdir -p $(@D)
 	curl -fsSL -o $@ $(VERDICT_URL)
+
+chat: $(BUILD)/chat
+
+$(BUILD)/chat: cli/chat.c $(LIB) $(wildcard include/*.h)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
 weights: $(WEIGHTS)
 
