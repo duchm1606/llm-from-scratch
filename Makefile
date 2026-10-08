@@ -15,7 +15,12 @@ DATA        := data/gpt2/encoder.json data/gpt2/vocab.bpe data/the-verdict.txt
 UNICODE_VERSION := 16.0.0
 UNICODE_DATA    := data/UnicodeData-$(UNICODE_VERSION).txt
 
-.PHONY: all test data unicode-tables clean
+# GPT-2 124M fine-tuned on Alpaca instructions.
+WEIGHTS_URL := https://huggingface.co/vicgalle/gpt2-alpaca/resolve/main/model.safetensors
+WEIGHTS_SRC := data/gpt2-alpaca/model.safetensors
+WEIGHTS     := data/gpt2_alpaca.bin
+
+.PHONY: all test data weights unicode-tables clean
 
 all: $(LIB)
 
@@ -40,6 +45,22 @@ data/gpt2/%:
 data/the-verdict.txt:
 	@mkdir -p $(@D)
 	curl -fsSL -o $@ $(VERDICT_URL)
+
+weights: $(WEIGHTS)
+
+# The exporter is order-only, so rebuilding it does not redo the export.
+$(WEIGHTS): $(WEIGHTS_SRC) | $(BUILD)/export_weights
+	$(BUILD)/export_weights $< $@
+
+$(BUILD)/export_weights: tools/export_weights.c | $(BUILD)
+	$(CC) $(CFLAGS) $< -o $@
+
+# Kept after the export, but deleting it does not trigger a new download.
+.SECONDARY: $(WEIGHTS_SRC)
+$(WEIGHTS_SRC):
+	@mkdir -p $(@D)
+	curl -fL --progress-bar -o $@.part $(WEIGHTS_URL)
+	mv $@.part $@
 
 # src/unicode_tables.h is committed; run this only to move to a new Unicode version.
 unicode-tables: $(BUILD)/gen_unicode_tables $(UNICODE_DATA)

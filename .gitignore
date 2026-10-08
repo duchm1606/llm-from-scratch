@@ -24,3 +24,8 @@ bin/
 
 # Downloaded data (make data)
 data/
+
+# Model weights (make weights), wherever they are put
+*.safetensors
+*.bin
+*.part
