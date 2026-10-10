@@ -20,7 +20,7 @@ WEIGHTS_URL := https://huggingface.co/vicgalle/gpt2-alpaca/resolve/main/model.sa
 WEIGHTS_SRC := data/gpt2-alpaca/model.safetensors
 WEIGHTS     := data/gpt2_alpaca.bin
 
-.PHONY: all test data weights chat unicode-tables clean
+.PHONY: all test data weights chat bench unicode-tables clean FORCE
 
 all: $(LIB)
 
@@ -50,6 +50,13 @@ chat: $(BUILD)/chat
 
 $(BUILD)/chat: cli/chat.c $(LIB) $(wildcard include/*.h)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
+
+bench: $(BUILD)/bench
+
+# The commit and the flags go into every CSV, so the bench is rebuilt each time.
+$(BUILD)/bench: tools/bench.c $(LIB) FORCE
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DBENCH_COMMIT='"$(shell git describe --always --dirty)"' \
+		-DBENCH_CFLAGS='"$(CFLAGS)"' $< $(LIB) $(LDLIBS) -o $@
 
 weights: $(WEIGHTS)
 
@@ -84,5 +91,7 @@ $(BUILD):
 
 clean:
 	rm -rf $(BUILD)
+
+FORCE:
 
 -include $(OBJS:.o=.d)

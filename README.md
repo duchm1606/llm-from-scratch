@@ -9,7 +9,7 @@ Re-implementing every component of an LLM in C, following the book *Build a Larg
 ├── src/          # C source code
 ├── include/      # Header files
 ├── cli/          # Command-line programs built on the library (chat)
-├── tools/        # Development tools (weight exporter, Unicode table generator)
+├── tools/        # Development tools (weight exporter, benchmark, Unicode table generator)
 ├── docs/         # Notes, summaries, and deep-dives per chapter
 └── tests/        # Unit tests
 ```
@@ -31,6 +31,7 @@ Re-implementing every component of an LLM in C, following the book *Build a Larg
 ```sh
 make          # build/libllm.a
 make test     # unit tests; downloads the tokenizer files and the book's text into data/ first
+make bench    # build/bench, generation speed with and without the KV cache: see docs/benchmark.md
 ```
 
 ## Chat with GPT-2
